@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CyberDraw // Mobile Air Canvas</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --neon-blue: #00f0ff;
+            --panel-bg: rgba(10, 10, 15, 0.9);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            background-color: #030307;
+            overflow: hidden;
+            color: #fff;
+            position: relative;
+        }
+
+        /* Full Screen Drawing Canvas */
+        #drawingCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 5;
+        }
+
+        /* Responsive Mobile Mirror Mode Camera View */
+        #webcam {
+            position: absolute;
+            bottom: 15px;
+            right: 15px;
+            width: 120px;
+            height: 90px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            transform: scaleX(-1); 
+            z-index: 2;
+            background: #000;
+            object-fit: cover;
+        }
+
+        #trackingOverlay {
+            position: absolute;
+            bottom: 15px;
+            right: 15px;
+            width: 120px;
+            height: 90px;
+            z-index: 3;
+            transform: scaleX(-1);
+            pointer-events: none;
+        }
+
+        /* Mobile-Friendly Stacking Top Controls */
+        .control-panel {
+            position: absolute;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            background: var(--panel-bg);
+            border: 1px solid rgba(0, 240, 255, 0.3);
+            box-shadow: 0 0 15px rgba(0, 240, 255, 0.15);
+            padding: 10px 15px;
+            border-radius: 20px;
+            display: flex;
+            flex-wrap: wrap; 
+            justify-content: center;
+            align-items: center;
+            gap: 12px;
+            width: 90%;
+            max-width: 500px;
+            backdrop-filter: blur(10px);
+        }
+
+        .panel-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        label {
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            color: var(--neon-blue);
+            font-weight: bold;
+        }
+
+        input[type="color"] {
+            background: transparent;
+            border: none;
+            width: 28px;
+            height: 28px;
+            cursor: pointer;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            background: #222;
+            height: 4px;
+            border-radius: 2px;
+            outline: none;
+            width: 80px;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--neon-blue);
+            cursor: pointer;
+        }
+
+        .hud-status {
+            font-size: 0.75rem;
+            font-weight: bold;
+            padding: 4px 10px;
+            border-radius: 15px;
+            background: rgba(0,0,0,0.5);
+            min-width: 95px;
+            text-align: center;
+            border: 1px solid #333;
+        }
+
+        .state-draw { color: #00ff55; border-color: #00ff55; }
+        .state-erase { color: #ff0055; border-color: #ff0055; }
+        .state-pause { color: #ffcc00; border-color: #ffcc00; }
+
+        .clear-btn {
+            background: transparent;
+            border: 1px solid #ff0055;
+            color: #ff0055;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-size: 0.7rem;
+            border-radius: 15px;
+        }
+
+        @media (min-width: 600px) {
+            #webcam, #trackingOverlay { width: 200px; height: 150px; }
+            input[type="range"] { width: 120px; }
+            .control-panel { padding: 12px 25px; border-radius: 50px; gap: 20px; width: auto; }
+            label { font-size: 0.8rem; }
+            .hud-status, .clear-btn { font-size: 0.8rem; padding: 6px 14px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="control-panel">
+        <div class="panel-group">
+            <label>COLOR</label>
+            <input type="color" id="brushColor" value="#00f0ff">
+        </div>
+        
+        <div class="panel-group">
+            <label>SIZE</label>
+            <input type="range" id="brushSize" min="3" max="30" value="10">
+        </div>
+
+        <button class="clear-btn" onclick="clearCanvas()">CLEAR</button>
+        <div class="hud-status state-pause" id="hudState">LOADING_AI...</div>
+    </div>
+
+    <canvas id="drawingCanvas"></canvas>
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="trackingOverlay"></canvas>
+
+    <script>
+        const canvas = document.getElementById('drawingCanvas');
+        const ctx = canvas.getContext('2d');
+        const video = document.getElementById('webcam');
+        const overlayCanvas = document.getElementById('trackingOverlay');
+        const oCtx = overlayCanvas.getContext('2d');
+        const hudState = document.getElementById('hudState');
+        const colorPicker = document.getElementById('brushColor');
+        const sizeSlider = document.getElementById('brushSize');
+
+        let lastX = null;
+        let lastY = null;
+
+        function initCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            ctx.fillStyle = '#030307';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        initCanvas();
+        window.addEventListener('resize', initCanvas);
+
+        function clearCanvas() {
+            ctx.fillStyle = '#030307';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function analyzeGesture(landmarks) {
+            const indexTip = landmarks[8];
+            const indexPip = landmarks[6];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+
+            const isIndexExtended = indexTip.y < indexPip.y;
+            const isMiddleExtended = middleTip.y < landmarks[10].y;
+            const isRingExtended = ringTip.y < landmarks[14].y;
+            const isPinkyExtended = pinkyTip.y < landmarks[18].y;
+
+            if (!isIndexExtended && !isMiddleExtended && !isRingExtended && !isPinkyExtended) {
+                return "PAUSE";
+            }
+            if (isIndexExtended && isMiddleExtended && isRingExtended && isPinkyExtended) {
+                return "ERASE";
+            }
+            if (isIndexExtended && !isMiddleExtended && !isRingExtended) {
+                return "DRAW";
+            }
+            return "PAUSE";
+        }
+
+        function processDrawing(landmarks, mode) {
+            const indexTip = landmarks[8];
+            const targetX = (1 - indexTip.x) * canvas.width;
+            const targetY = indexTip.y * canvas.height;
+
+            hudState.innerText = mode + "_MODE";
+            hudState.className = `hud-status state-${mode.toLowerCase()}`;
+
+            if (mode === "DRAW") {
+                if (lastX !== null && lastY !== null) {
+                    ctx.beginPath();
+                    ctx.moveTo(lastX, lastY);
+                    ctx.lineTo(targetX, targetY);
+                    ctx.strokeStyle = colorPicker.value;
+                    ctx.lineWidth = sizeSlider.value;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.shadowColor = colorPicker.value;
+                    ctx.shadowBlur = parseInt(sizeSlider.value) * 1.5;
+                    ctx.stroke();
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(lastX, lastY);
+                    ctx.lineTo(targetX, targetY);
+                    ctx.strokeStyle = "#ffffff";
+                    ctx.lineWidth = parseInt(sizeSlider.value) * 0.3;
+                    ctx.shadowBlur = 0;
+                    ctx.stroke();
+                }
+                lastX = targetX;
+                lastY = targetY;
+            } 
+            else if (mode === "ERASE") {
+                ctx.beginPath();
+                ctx.arc(targetX, targetY, parseInt(sizeSlider.value) * 3, 0, Math.PI * 2);
+                ctx.fillStyle = '#030307';
+                ctx.shadowBlur = 0;
+                ctx.fill();
+                lastX = null;
+                lastY = null;
+            } 
+            else {
+                lastX = null;
+                lastY = null;
+            }
+        }
+
+        function onResults(results) {
+            if(overlayCanvas.width !== video.videoWidth) {
+                overlayCanvas.width = video.videoWidth;
+                overlayCanvas.height = video.videoHeight;
+            }
+            oCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const primaryHand = results.multiHandLandmarks[0];
+                drawConnectors(oCtx, primaryHand, HAND_CONNECTIONS, {color: '#00f0ff', lineWidth: 2});
+                drawLandmarks(oCtx, primaryHand, {color: '#ff0055', lineWidth: 1, radius: 3});
+
+                const gestureMode = analyzeGesture(primaryHand);
+                processDrawing(primaryHand, gestureMode);
+            } else {
+                hudState.innerText = "AWAITING_HAND";
+                hudState.className = "hud-status state-pause";
+                lastX = null;
+                lastY = null;
+            }
+        }
+
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.6, 
+            minTrackingConfidence: 0.6
+        });
+
+        hands.onResults(onResults);
+
+        const camera = new Camera(video, {
+            onFrame: async () => {
+                await hands.send({image: video});
+            },
+            facingMode: 'user', 
+            width: window.innerWidth > 600 ? 640 : 320,
+            height: window.innerWidth > 600 ? 480 : 240
+        });
+        
+        camera.start().then(() => {
+            hudState.innerText = "SYSTEM_READY";
+        });
+    </script>
+</body>
+</html>
