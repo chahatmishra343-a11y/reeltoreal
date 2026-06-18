@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>CyberDraw // Mobile Air Canvas</title>
+    <title>CyberDraw // AR Mirror Edition</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -12,7 +12,7 @@
     <style>
         :root {
             --neon-blue: #00f0ff;
-            --panel-bg: rgba(10, 10, 15, 0.9);
+            --panel-bg: rgba(5, 5, 10, 0.75);
         }
 
         * {
@@ -25,49 +25,51 @@
         body, html {
             width: 100%;
             height: 100%;
-            background-color: #030307;
+            background-color: #000;
             overflow: hidden;
             color: #fff;
             position: relative;
         }
 
-        /* Full Screen Drawing Canvas */
+        /* NEW: Full Screen Web Video Background (The Mirror Effect) */
+        #webcam {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            transform: scaleX(-1); /* Flips camera horizontally so it acts like a real mirror */
+            z-index: 1; /* Sits completely in the background */
+            filter: brightness(0.5) contrast(1.1); /* Deepens shadows so the neon text pops incredibly well */
+        }
+
+        /* The Neon Drawing Canvas Layer sitting directly over the camera feed */
         #drawingCanvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            z-index: 5;
+            z-index: 5; /* Stays on top of video so you draw over yourself */
+            pointer-events: none; /* Let tracking data slip through layers safely */
         }
 
-        /* Responsive Mobile Mirror Mode Camera View */
-        #webcam {
-            position: absolute;
-            bottom: 15px;
-            right: 15px;
-            width: 120px;
-            height: 90px;
-            border: 1px solid #333;
-            border-radius: 6px;
-            transform: scaleX(-1); 
-            z-index: 2;
-            background: #000;
-            object-fit: cover;
-        }
-
+        /* AI Landmark Overlay Tracker (Sits exactly matching full screen dimensions) */
         #trackingOverlay {
             position: absolute;
-            bottom: 15px;
-            right: 15px;
-            width: 120px;
-            height: 90px;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
             z-index: 3;
             transform: scaleX(-1);
             pointer-events: none;
+            opacity: 0.4; /* Faded skeleton wireframe so it looks high-tech but not distracting */
         }
 
-        /* Mobile-Friendly Stacking Top Controls */
+        /* Mobile-Responsive Top Hub Control Panel */
         .control-panel {
             position: absolute;
             top: 15px;
@@ -75,8 +77,8 @@
             transform: translateX(-50%);
             z-index: 10;
             background: var(--panel-bg);
-            border: 1px solid rgba(0, 240, 255, 0.3);
-            box-shadow: 0 0 15px rgba(0, 240, 255, 0.15);
+            border: 1px solid rgba(0, 240, 255, 0.2);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
             padding: 10px 15px;
             border-radius: 20px;
             display: flex;
@@ -86,7 +88,7 @@
             gap: 12px;
             width: 90%;
             max-width: 500px;
-            backdrop-filter: blur(10px);
+            backdrop-filter: blur(8px);
         }
 
         .panel-group {
@@ -112,11 +114,11 @@
 
         input[type="range"] {
             -webkit-appearance: none;
-            background: #222;
+            background: rgba(255,255,255,0.2);
             height: 4px;
             border-radius: 2px;
             outline: none;
-            width: 80px;
+            width: 70px;
         }
 
         input[type="range"]::-webkit-slider-thumb {
@@ -133,7 +135,7 @@
             font-weight: bold;
             padding: 4px 10px;
             border-radius: 15px;
-            background: rgba(0,0,0,0.5);
+            background: rgba(0,0,0,0.6);
             min-width: 95px;
             text-align: center;
             border: 1px solid #333;
@@ -154,8 +156,7 @@
         }
 
         @media (min-width: 600px) {
-            #webcam, #trackingOverlay { width: 200px; height: 150px; }
-            input[type="range"] { width: 120px; }
+            input[type="range"] { width: 110px; }
             .control-panel { padding: 12px 25px; border-radius: 50px; gap: 20px; width: auto; }
             label { font-size: 0.8rem; }
             .hud-status, .clear-btn { font-size: 0.8rem; padding: 6px 14px; }
@@ -172,16 +173,18 @@
         
         <div class="panel-group">
             <label>SIZE</label>
-            <input type="range" id="brushSize" min="3" max="30" value="10">
+            <input type="range" id="brushSize" min="4" max="35" value="12">
         </div>
 
         <button class="clear-btn" onclick="clearCanvas()">CLEAR</button>
         <div class="hud-status state-pause" id="hudState">LOADING_AI...</div>
     </div>
 
-    <canvas id="drawingCanvas"></canvas>
     <video id="webcam" autoplay playsinline></video>
+
     <canvas id="trackingOverlay"></canvas>
+
+    <canvas id="drawingCanvas"></canvas>
 
     <script>
         const canvas = document.getElementById('drawingCanvas');
@@ -199,15 +202,14 @@
         function initCanvas() {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
-            ctx.fillStyle = '#030307';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // Canvas background is now TRANSPARENT so you see the camera behind it!
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
         initCanvas();
         window.addEventListener('resize', initCanvas);
 
         function clearCanvas() {
-            ctx.fillStyle = '#030307';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
 
         function analyzeGesture(landmarks) {
@@ -267,11 +269,14 @@
                 lastY = targetY;
             } 
             else if (mode === "ERASE") {
+                // Erasing works by drawing transparent circles back over the artwork!
+                ctx.save();
+                ctx.globalCompositeOperation = 'destination-out';
                 ctx.beginPath();
                 ctx.arc(targetX, targetY, parseInt(sizeSlider.value) * 3, 0, Math.PI * 2);
-                ctx.fillStyle = '#030307';
-                ctx.shadowBlur = 0;
                 ctx.fill();
+                ctx.restore();
+                
                 lastX = null;
                 lastY = null;
             } 
@@ -290,8 +295,10 @@
 
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                 const primaryHand = results.multiHandLandmarks[0];
-                drawConnectors(oCtx, primaryHand, HAND_CONNECTIONS, {color: '#00f0ff', lineWidth: 2});
-                drawLandmarks(oCtx, primaryHand, {color: '#ff0055', lineWidth: 1, radius: 3});
+                
+                // Draw cyan and pink tracking skeletons right over your hand in real time
+                drawConnectors(oCtx, primaryHand, HAND_CONNECTIONS, {color: '#00f0ff', lineWidth: 3});
+                drawLandmarks(oCtx, primaryHand, {color: '#ff0055', lineWidth: 1, radius: 4});
 
                 const gestureMode = analyzeGesture(primaryHand);
                 processDrawing(primaryHand, gestureMode);
@@ -310,8 +317,8 @@
         hands.setOptions({
             maxNumHands: 1,
             modelComplexity: 1,
-            minDetectionConfidence: 0.6, 
-            minTrackingConfidence: 0.6
+            minDetectionConfidence: 0.55, 
+            minTrackingConfidence: 0.55
         });
 
         hands.onResults(onResults);
